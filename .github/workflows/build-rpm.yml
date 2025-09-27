@@ -1,0 +1,186 @@
+name: Build and Upload RPM Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      architecture:
+        description: 'Architecture to build for'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - 'x86_64'
+          - 'aarch64'
+          - 'both'
+      create_release:
+        description: 'Create a GitHub release with the RPM packages'
+        required: false
+        default: true
+        type: boolean
+      release_tag:
+        description: 'Release tag (leave empty for auto-generated tag)'
+        required: false
+        type: string
+
+jobs:
+  build-x86_64:
+    if: ${{ github.event.inputs.architecture == 'x86_64' || github.event.inputs.architecture == 'both' }}
+    runs-on: ubuntu-latest
+    name: Build RPM for x86_64
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Install RPM build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm rpm-common librpmbuild9t64
+          
+      - name: Set up RPM build environment
+        run: |
+          mkdir -p $HOME/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          
+      - name: Build RPM package for x86_64
+        run: |
+          chmod +x build-rpm.sh
+          ./build-rpm.sh --arch x86_64
+          
+      - name: List built packages
+        run: |
+          echo "Built RPM packages:"
+          find $HOME/rpmbuild/RPMS -name "*.rpm" -exec ls -lh {} \;
+          find $HOME/rpmbuild/SRPMS -name "*.rpm" -exec ls -lh {} \;
+          
+      - name: Upload x86_64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages-x86_64
+          path: |
+            ${{ runner.home }}/rpmbuild/RPMS/**/*.rpm
+            ${{ runner.home }}/rpmbuild/SRPMS/*.rpm
+          retention-days: 30
+
+  build-aarch64:
+    if: ${{ github.event.inputs.architecture == 'aarch64' || github.event.inputs.architecture == 'both' }}
+    runs-on: ubuntu-latest
+    name: Build RPM for aarch64
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Set up QEMU for cross-compilation
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+          
+      - name: Install RPM build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm rpm-common librpmbuild9t64
+          
+      - name: Set up RPM build environment
+        run: |
+          mkdir -p $HOME/rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+          
+      - name: Build RPM package for aarch64
+        run: |
+          chmod +x build-rpm.sh
+          ./build-rpm.sh --arch aarch64
+          
+      - name: List built packages
+        run: |
+          echo "Built RPM packages:"
+          find $HOME/rpmbuild/RPMS -name "*.rpm" -exec ls -lh {} \;
+          find $HOME/rpmbuild/SRPMS -name "*.rpm" -exec ls -lh {} \;
+          
+      - name: Upload aarch64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages-aarch64
+          path: |
+            ${{ runner.home }}/rpmbuild/RPMS/**/*.rpm
+            ${{ runner.home }}/rpmbuild/SRPMS/*.rpm
+          retention-days: 30
+
+  create-release:
+    if: ${{ github.event.inputs.create_release == 'true' && (success() || failure()) }}
+    needs: [build-x86_64, build-aarch64]
+    runs-on: ubuntu-latest
+    name: Create GitHub Release
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Download x86_64 artifacts
+        if: ${{ (github.event.inputs.architecture == 'x86_64' || github.event.inputs.architecture == 'both') && needs.build-x86_64.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm-packages-x86_64
+          path: ./rpm-packages/
+          
+      - name: Download aarch64 artifacts
+        if: ${{ (github.event.inputs.architecture == 'aarch64' || github.event.inputs.architecture == 'both') && needs.build-aarch64.result == 'success' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: rpm-packages-aarch64
+          path: ./rpm-packages/
+          
+      - name: Generate release tag
+        id: generate_tag
+        run: |
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.release_tag }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=$(grep '^VERSION=' build-rpm.sh | cut -d'"' -f2)
+            RELEASE=$(grep '^RELEASE=' build-rpm.sh | cut -d'"' -f2)
+            TAG="v${VERSION}-${RELEASE}"
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          fi
+          
+      - name: List RPM packages
+        run: |
+          echo "RPM packages to be released:"
+          find ./rpm-packages -name "*.rpm" -exec ls -lh {} \;
+          
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.generate_tag.outputs.tag }}
+          name: libhdfs RPM Packages ${{ steps.generate_tag.outputs.tag }}
+          body: |
+            ## libhdfs RPM Packages
+            
+            This release contains RPM packages for libhdfs (Hadoop Distributed File System C/C++ library).
+            
+            ### Architecture Support
+            - x86_64: 64-bit Intel/AMD processors
+            - aarch64: 64-bit ARM processors (ARM64)
+            
+            ### Package Contents
+            - `libhdfs-*.rpm`: Runtime library package
+            - `libhdfs-devel-*.rpm`: Development headers and static library
+            - `libhdfs-*.src.rpm`: Source RPM package
+            
+            ### Installation
+            ```bash
+            # Install runtime library
+            sudo rpm -ivh libhdfs-*.rpm
+            
+            # Install development package (includes runtime)
+            sudo rpm -ivh libhdfs-devel-*.rpm
+            ```
+            
+            ### Repository Usage
+            You can also add these packages to your RPM repository and install via yum/dnf.
+            
+            Built from commit: ${{ github.sha }}
+            Architecture: ${{ github.event.inputs.architecture }}
+          files: |
+            ./rpm-packages/**/*.rpm
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
