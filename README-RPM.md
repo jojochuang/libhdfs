@@ -139,10 +139,53 @@ make distclean
 make rpm
 ```
 
+## GitHub Action for Automated Builds
+
+This repository includes a GitHub Action that can be triggered manually to build and upload RPM packages to GitHub Releases.
+
+### Using the GitHub Action
+
+1. **Navigate to Actions tab**: Go to the Actions tab in the GitHub repository
+2. **Find the workflow**: Look for "Build and Upload RPM Packages" workflow
+3. **Run workflow**: Click "Run workflow" button
+4. **Configure options**:
+   - **Architecture**: Choose `x86_64`, `aarch64`, or `both` (default: `both`)
+   - **Create release**: Enable/disable GitHub release creation (default: `true`)
+   - **Release tag**: Optional custom release tag (auto-generated if empty)
+
+### Action Features
+
+- **Multi-architecture support**: Builds for both x86_64 and aarch64
+- **Automated releases**: Creates GitHub releases with RPM packages
+- **Artifact storage**: Stores build artifacts for 30 days
+- **Manual trigger**: Workflow dispatch allows on-demand builds
+- **Flexible tagging**: Auto-generates version tags or uses custom tags
+
+### Workflow Outputs
+
+The action produces the following artifacts:
+- `libhdfs-{version}-{release}.{arch}.rpm` - Runtime library
+- `libhdfs-devel-{version}-{release}.{arch}.rpm` - Development package
+- `libhdfs-{version}-{release}.src.rpm` - Source RPM
+
+These are automatically uploaded to:
+1. **GitHub Action Artifacts** (available for 30 days)
+2. **GitHub Releases** (permanent, if enabled)
+
+### Example Usage
+
+```bash
+# After downloading from GitHub Releases:
+wget https://github.com/jojochuang/libhdfs/releases/download/v3.3.6-1/libhdfs-3.3.6-1.x86_64.rpm
+sudo rpm -ivh libhdfs-3.3.6-1.x86_64.rpm
+```
+
 ## Files Structure
 
 ```
 .
+├── .github/workflows/
+│   └── build-rpm.yml        # GitHub Action workflow
 ├── arm64/                  # aarch64 binaries
 │   ├── libhdfs.a
 │   ├── libhdfs.so -> libhdfs.so.0.0.0
